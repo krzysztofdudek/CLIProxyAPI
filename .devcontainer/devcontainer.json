@@ -1,0 +1,25 @@
+{
+  "name": "CLIProxyAPI Dev",
+  "image": "mcr.microsoft.com/devcontainers/go:1.26-bookworm",
+  "runArgs": [
+    "--name=cli-proxy-api-devcontainer",
+    "--hostname=cli-proxy-api-devcontainer"
+  ],
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true
+    }
+  },
+  "mounts": [
+    "source=cli-proxy-api-devcontainer-go-cache,target=/go/pkg,type=volume"
+  ],
+  "postCreateCommand": "sudo chown -R vscode:golang /go/pkg && go mod download",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ]
+    }
+  },
+  "remoteUser": "vscode"
+}
