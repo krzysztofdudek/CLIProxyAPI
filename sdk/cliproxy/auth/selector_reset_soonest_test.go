@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
@@ -142,5 +144,55 @@ func TestResetSoonestSelector_SessionAffinityKeepsBinding(t *testing.T) {
 	}
 	if second.ID != "auth-b" {
 		t.Fatalf("Pick() session two = %q, want auth-b", second.ID)
+	}
+}
+
+// The manager checks availability against each credential's upstream model, so
+// the selector must not repeat the check against the requested alias.
+func TestManagerSelectAuth_ResetSoonestUsesUpstreamModelAvailability(t *testing.T) {
+	const (
+		provider     = "claude"
+		requestModel = "claude-reset-soonest-alias"
+		targetModel  = "claude-reset-soonest-target"
+	)
+
+	manager := NewManager(nil, &ResetSoonestSelector{}, nil)
+	manager.RegisterExecutor(&aliasRoutingExecutor{id: provider})
+	manager.SetOAuthModelAlias(map[string][]internalconfig.OAuthModelAlias{
+		provider: {{Name: targetModel, Alias: requestModel}},
+	})
+
+	now := time.Now()
+	next := now.Add(time.Hour)
+	soonest := resetSoonestAuth("claude-reset-a", now.Add(24*time.Hour))
+	soonest.Status = StatusActive
+	soonest.ModelStates = map[string]*ModelState{
+		targetModel: {Status: StatusActive},
+		requestModel: {
+			Status:         StatusError,
+			Unavailable:    true,
+			NextRetryAfter: next,
+			Quota:          QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: next},
+		},
+	}
+	later := resetSoonestAuth("claude-reset-b", now.Add(5*24*time.Hour))
+	later.Status = StatusActive
+
+	reg := registry.GetGlobalRegistry()
+	for _, auth := range []*Auth{soonest, later} {
+		if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+			t.Fatalf("register %s: %v", auth.ID, errRegister)
+		}
+		reg.RegisterClient(auth.ID, provider, []*registry.ModelInfo{{ID: requestModel}, {ID: targetModel}})
+		authID := auth.ID
+		t.Cleanup(func() { reg.UnregisterClient(authID) })
+	}
+
+	selected, errSelect := manager.SelectAuth(context.Background(), provider, requestModel, cliproxyexecutor.Options{})
+	if errSelect != nil {
+		t.Fatalf("SelectAuth() error = %v", errSelect)
+	}
+	if selected == nil || selected.ID != soonest.ID {
+		t.Fatalf("SelectAuth() selected = %v, want %s", selected, soonest.ID)
 	}
 }
